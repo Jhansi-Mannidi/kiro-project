@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState } from 'react';
 import FilePanel from './components/FilePanel';
 import CodePanel from './components/CodePanel';
 import RightPanel from './components/RightPanel';
@@ -6,6 +6,9 @@ import TopBar from './components/TopBar';
 import './index.css';
 
 const STATUS = { IDLE: 'idle', LOADING: 'loading', DONE: 'done', ERROR: 'error' };
+
+// ✅ ADD THIS (YOUR BACKEND URL)
+const API_BASE = "https://kiro-project-eswo.onrender.com";
 
 export default function App() {
   const [theme, setTheme] = useState('dark');
@@ -32,34 +35,58 @@ export default function App() {
     setStatus(STATUS.LOADING);
     setFiles([]); setSelectedFile(null); setLogs([]); setOutputPath(''); setTests([]);
     setDeployUrl(''); setDeployLocalUrl(''); setDeployStatus('idle');
+
     addLog('Starting generation...', 'info');
     addLog('⏳ This takes 3-8 minutes with Ollama — please wait...', 'warn');
     addLog('Agents: Database → Backend → Frontend → DevOps', 'info');
+
     try {
-      const res = await fetch('/api/generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(`${API_BASE}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt }),
       });
 
-      let data;
-      const text = await res.text();
-      try { data = JSON.parse(text); } catch {
+      if (!response.ok) {
+        const text = await response.text();
         setStatus(STATUS.ERROR);
-        addLog(`Server error (${res.status}): ${text.slice(0, 200) || 'Empty response'}`, 'error');
+        addLog(`Server error (${response.status}): ${text.slice(0, 200)}`, 'error');
         return;
       }
 
-      if (data.success) {
-        setStatus(STATUS.DONE);
-        setOutputPath(data.outputPath);
-        addLog('Generation complete!', 'success');
-        data.tasks?.forEach(tk => addLog(`  ✓ ${tk.agentType}: ${tk.description.slice(0, 55)}...`, 'success'));
-        await loadFiles(data.outputPath);
-        // Auto-deploy directly without domain modal
-        await autoDeploy(data.outputPath, '');
-      } else {
-        setStatus(STATUS.ERROR);
-        addLog(data.error || 'Unknown error', 'error');
+      // Read SSE stream to keep connection alive during long generation
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr) continue;
+          try {
+            const data = JSON.parse(jsonStr);
+            if (data.message) {
+              addLog(data.message, data.level || 'info');
+            } else if (data.success === true) {
+              setStatus(STATUS.DONE);
+              setOutputPath(data.outputPath);
+              addLog('Generation complete!', 'success');
+              data.tasks?.forEach(tk => addLog(`  ✓ ${tk.agentType}: ${tk.description?.slice(0, 55)}...`, 'success'));
+              await loadFiles(data.outputPath);
+              await autoDeploy(data.outputPath, '');
+            } else if (data.success === false) {
+              setStatus(STATUS.ERROR);
+              addLog(data.error || 'Unknown error', 'error');
+            }
+          } catch { /* ignore parse errors on heartbeat lines */ }
+        }
       }
     } catch (err) {
       setStatus(STATUS.ERROR);
@@ -67,49 +94,49 @@ export default function App() {
     }
   }
 
-  async function handleDomainConfirm(domain) {
-    setShowDomainModal(false);
-    await autoDeploy(pendingOutputPath, domain);
-  }
-
-  function handleDomainSkip() {
-    setShowDomainModal(false);
-    autoDeploy(pendingOutputPath, '');
-  }
-
   async function loadFiles(op) {
     try {
-      const res = await fetch(`/api/files?path=${encodeURIComponent(op)}`);
+      const res = await fetch(`${API_BASE}/api/files?path=${encodeURIComponent(op)}`);
       const data = await res.json();
-      if (data.files?.length) { setFiles(data.files); setSelectedFile(data.files[0]); }
-    } catch { addLog('Could not load files', 'warn'); }
+
+      if (data.files?.length) {
+        setFiles(data.files);
+        setSelectedFile(data.files[0]);
+      }
+    } catch {
+      addLog('Could not load files', 'warn');
+    }
   }
 
   async function autoDeploy(op, domain) {
     setDeployStatus('deploying');
-    addLog(`🐳 Deploying${domain ? ` as ${domain}` : ''}...`, 'info');
+    addLog(`🐳 Deploying...`, 'info');
+
     try {
-      const res = await fetch('/api/deploy', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch(`${API_BASE}/api/deploy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ outputPath: op, domain }),
       });
+
       const text = await res.text();
       let data;
-      try { data = JSON.parse(text); } catch { data = { success: false, error: text }; }
+
+      try { data = JSON.parse(text); } catch {
+        data = { success: false, error: text };
+      }
+
       if (data.success) {
         setDeployUrl(data.url);
         setDeployLocalUrl(data.localUrl || data.url);
         setDeployStatus('done');
-        if (data.url !== data.localUrl && data.localUrl) {
-          addLog(`🌍 Public URL: ${data.url}`, 'success');
-          addLog(`🏠 Local URL: ${data.localUrl}`, 'info');
-        } else {
-          addLog(`🚀 Deployed! Live at: ${data.url}`, 'success');
-        }
+
+        addLog(`🚀 Deployed: ${data.url}`, 'success');
       } else {
         setDeployStatus('error');
-        addLog(`Deploy failed: ${data.error?.slice(0, 100)}`, 'warn');
+        addLog(`Deploy failed: ${data.error}`, 'warn');
       }
+
     } catch (err) {
       setDeployStatus('error');
       addLog(`Deploy error: ${err.message}`, 'warn');
@@ -118,28 +145,45 @@ export default function App() {
 
   async function handleRunTests() {
     if (!outputPath) return;
-    setTestStatus('running'); setTests([]);
-    addLog('Running test suite...', 'info');
+
+    setTestStatus('running');
+    setTests([]);
+
+    addLog('Running tests...', 'info');
+
     try {
-      const res = await fetch('/api/test', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch(`${API_BASE}/api/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ outputPath, prompt }),
       });
+
       const data = await res.json();
+
       setTests(data.tests || []);
       setTestStatus('done');
-      const passed = data.tests?.filter(t => t.status === 'pass').length || 0;
-      addLog(`Tests complete: ${passed}/${data.tests?.length} passed`, passed === data.tests?.length ? 'success' : 'warn');
+
+      addLog('Tests complete', 'success');
+
     } catch (err) {
       setTestStatus('done');
-      addLog('Test run failed: ' + err.message, 'error');
+      addLog(err.message, 'error');
     }
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: t.bg, color: t.text, fontFamily: '"Inter", -apple-system, sans-serif' }}>
-      <TopBar prompt={prompt} setPrompt={setPrompt} status={status} onGenerate={handleGenerate} theme={theme} setTheme={setTheme} t={t} />
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <TopBar
+        prompt={prompt}
+        setPrompt={setPrompt}
+        status={status}
+        onGenerate={handleGenerate}
+        theme={theme}
+        setTheme={setTheme}
+        t={t}
+      />
+
+      <div style={{ display: 'flex', flex: 1 }}>
         <FilePanel files={files} selectedFile={selectedFile} setSelectedFile={setSelectedFile} status={status} logs={logs} t={t} />
         <CodePanel selectedFile={selectedFile} t={t} />
         <RightPanel status={status} outputPath={outputPath} tests={tests} testStatus={testStatus} onRunTests={handleRunTests} t={t} isDark={isDark} deployUrl={deployUrl} deployLocalUrl={deployLocalUrl} deployStatus={deployStatus} />
@@ -149,12 +193,9 @@ export default function App() {
 }
 
 export const dark = {
-  bg: '#09090b', surface: '#18181b', input: '#27272a', border: '#3f3f46',
-  text: '#fafafa', muted: '#71717a', accent: '#ffffff', dim: '#52525b',
-  selected: '#27272a', codeBg: '#0c0c0e', green: '#4ade80', red: '#f87171', yellow: '#fbbf24',
+  bg: '#09090b', surface: '#18181b', text: '#fafafa'
 };
+
 export const light = {
-  bg: '#ffffff', surface: '#f4f4f5', input: '#e4e4e7', border: '#d4d4d8',
-  text: '#09090b', muted: '#71717a', accent: '#18181b', dim: '#a1a1aa',
-  selected: '#e4e4e7', codeBg: '#f8f8f8', green: '#16a34a', red: '#dc2626', yellow: '#d97706',
+  bg: '#ffffff', surface: '#f4f4f5', text: '#09090b'
 };
