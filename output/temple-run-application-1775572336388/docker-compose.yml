@@ -1,0 +1,28 @@
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: temple_run_db
+      POSTGRES_USER: temple_run_user
+      POSTGRES_PASSWORD: temple_run_password
+    volumes:
+      - temple-run-postgres-data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    ports:
+      - "3108:3000"
+    environment:
+      DATABASE_URL: postgres://temple_run_user:temple_run_password@postgres:5432/temple_run_db
+      PORT: 3000
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8088:80"
+
+volumes:
+  temple-run-postgres-data:

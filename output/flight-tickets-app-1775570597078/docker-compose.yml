@@ -1,0 +1,28 @@
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: flight_tickets_db
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: password
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    ports:
+      - "3103:3000"
+    environment:
+      DATABASE_URL: postgres://root:password@postgres:5432/flight_tickets_db
+      PORT: 3000
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8083:80"
+
+volumes:
+  db-data:

@@ -1,0 +1,28 @@
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: clockin_clockout
+      POSTGRES_USER: clockin_clockout_user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - clockin_clockout_postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    ports:
+      - "3109:3000"
+    environment:
+      DATABASE_URL: postgres://clockin_clockout_user:password@postgres:5432/clockin_clockout
+      PORT: 3000
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8089:80"
+
+volumes:
+  clockin_clockout_postgres_data:

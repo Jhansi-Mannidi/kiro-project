@@ -1,0 +1,28 @@
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: train_tickets_db
+      POSTGRES_USER: train_tickets_user
+      POSTGRES_PASSWORD: train_tickets_password
+    volumes:
+      - train_tickets_postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    ports:
+      - "3103:3000"
+    environment:
+      DATABASE_URL: postgres://train_tickets_user:train_tickets_password@postgres/train_tickets_db
+      PORT: 3000
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8083:80"
+
+volumes:
+  train_tickets_postgres_data:
